@@ -46,8 +46,15 @@
     </div>
   </div>
 
+
+  <div class="card" id="rgbCard" style="display:none">
+    <div class="card-head"><span>RAW RGB CHANNELS</span><span id="rgbInfo" class="dim"></span></div>
+    <canvas id="rgbChart" height="100"></canvas>
+    <p class="hint" style="margin-top:6px">Red/Green/Blue mean values from face ROIs. The tiny oscillations in green = your pulse.</p>
+  </div>
+
   <div class="card" id="signalCard" style="display:none">
-    <div class="card-head"><span>BVP SIGNAL</span><span id="sigQuality" class="dim"></span></div>
+    <div class="card-head"><span>BVP SIGNAL (after POS/CHROM + filter)</span><span id="sigQuality" class="dim"></span></div>
     <canvas id="bvpChart" height="120"></canvas>
   </div>
 

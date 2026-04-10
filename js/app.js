@@ -25,7 +25,7 @@
     });
 
     // Camera
-    Camera.init($('video'), $('overlay'));
+    Cam.init($('video'), $('overlay'));
 
     // Buttons
     $('btnStart').addEventListener('click', startScan);
@@ -61,7 +61,7 @@
     var startTime = Date.now();
     var bvpData = [];
 
-    Camera.start(function(data) {
+    Cam.start(function(data) {
       if (!scanning) return;
 
       var elapsed = (Date.now() - startTime) / 1000;
@@ -79,63 +79,82 @@
       if (data.boxes && data.frame % 10 === 0) {
         $('roiCard').style.display = '';
         $('roiFrame').textContent = 'Frame ' + data.frame;
-        Camera.drawROI('roiF', data.boxes.f);
-        Camera.drawROI('roiL', data.boxes.l);
-        Camera.drawROI('roiR', data.boxes.r);
+        Cam.drawROI('roiF', data.boxes.f);
+        Cam.drawROI('roiL', data.boxes.l);
+        Cam.drawROI('roiR', data.boxes.r);
       }
 
-      // Process BVP signal
-      if (data.rgbBuffer.length > 30) {
-        var bvp = Signal.pos(data.rgbBuffer);
-        var filtered = Signal.bandpass(bvp, FPS, 0.7, 4.0);
+      // Show live RGB channels
+      if (data.rgbBuffers && data.rgbBuffers.all && data.rgbBuffers.all.length > 10) {
+        var rgbEl = document.getElementById('rgbCard');
+        if (rgbEl) rgbEl.style.display = '';
+        var rgbBuf = data.rgbBuffers.all;
+        var showN = Math.min(rgbBuf.length, 200);
+        var rCh = [], gCh = [], bCh = [];
+        for (var k = rgbBuf.length - showN; k < rgbBuf.length; k++) {
+          rCh.push(rgbBuf[k][0]);
+          gCh.push(rgbBuf[k][1]);
+          bCh.push(rgbBuf[k][2]);
+        }
+        UI.drawChart('rgbChart', null, {
+          height: 100,
+          series: [
+            { data: rCh, color: '#e66a6a' },
+            { data: gCh, color: '#3ee68a' },
+            { data: bCh, color: '#6a9ee6' }
+          ]
+        });
+        var gRange = Math.max.apply(null, gCh) - Math.min.apply(null, gCh);
+        document.getElementById('rgbInfo').textContent = rgbBuf.length + ' frames · G range: ' + gRange.toFixed(2);
+      }
 
-        // Show live signal (last 150 samples)
-        $('signalCard').style.display = '';
-        var showLen = Math.min(filtered.length, 150);
-        var showData = [];
-        for (var i = filtered.length - showLen; i < filtered.length; i++) showData.push(filtered[i]);
-        UI.drawChart('bvpChart', showData, { height: 120 });
+      // Process BVP signal live
+      var rgbAll = data.rgbBuffers ? data.rgbBuffers.all : [];
+      if (rgbAll.length > FPS * 3) {
+        var liveBVP = Signal.extractBVP(rgbAll, FPS);
+        if (liveBVP && liveBVP.bvp) {
+          var filtered = liveBVP.bvp;
+          $('signalCard').style.display = '';
+          var showLen = Math.min(filtered.length, 150);
+          var showData = [];
+          for (var i = filtered.length - showLen; i < filtered.length; i++) showData.push(filtered[i]);
+          UI.drawChart('bvpChart', showData, { height: 120 });
 
-        // Show spectrum
-        if (filtered.length > 64) {
           $('specCard').style.display = '';
-          var spec = Signal.powerSpectrum(filtered, FPS);
-          // Find HR peak
-          var maxP = 0, hrFreq = 1;
-          for (var i = 0; i < spec.freqs.length; i++) {
-            if (spec.freqs[i] >= 0.75 && spec.freqs[i] <= 3.5 && spec.power[i] > maxP) {
-              maxP = spec.power[i]; hrFreq = spec.freqs[i];
-            }
-          }
-          UI.drawSpectrum('specChart', spec.freqs, spec.power, hrFreq);
-          $('sigQuality').textContent = 'HR ~' + Math.round(hrFreq * 60) + ' BPM';
+          UI.drawSpectrum('specChart', liveBVP.spec.freqs, liveBVP.spec.power, liveBVP.hrFreq);
+          $('sigQuality').textContent = liveBVP.method + ' · HR ~' + Math.round(liveBVP.hr) + ' BPM · SNR ' + liveBVP.snr.toFixed(1);
         }
       }
 
       // Complete scan
       if (elapsed >= SCAN_DURATION) {
-        completeScan(data.rgbBuffer);
+        completeScan(data.rgbBuffers.all);
       }
     });
   }
 
   function completeScan(rgbBuffer) {
     scanning = false;
-    Camera.stop();
+    Cam.stop();
     $('btnStart').disabled = false;
     $('btnStop').disabled = true;
     $('scanStatus').textContent = 'Processing…';
 
-    if (rgbBuffer.length < FPS * 5) {
+    if (!rgbBuffer || rgbBuffer.length < FPS * 5) {
       $('scanStatus').textContent = 'Not enough data — try again in better lighting';
       UI.toast('Scan failed — insufficient data', 'err');
       return;
     }
 
-    // Final BVP
-    var bvp = Signal.pos(rgbBuffer);
+    // Final BVP — runs POS + CHROM, picks stronger signal
     var profile = getProfile();
-    var features = Signal.extractFeatures(bvp, FPS, profile);
+    var bvpResult = Signal.extractBVP(rgbBuffer, FPS);
+    if (!bvpResult || bvpResult.snr < 1.5) {
+      $('scanStatus').textContent = 'Weak signal (SNR: ' + (bvpResult ? bvpResult.snr.toFixed(1) : '0') + ') — try better lighting';
+      UI.toast('Signal too weak — face the light source', 'err');
+      return;
+    }
+    var features = Signal.extractFeatures(bvpResult, FPS, profile);
 
     if (!features) {
       $('scanStatus').textContent = 'Could not extract pulse — try again';
@@ -155,7 +174,7 @@
     window._lastRes = result; // for calibration
 
     // Display
-    $('scanStatus').textContent = 'Complete ✓';
+    $('scanStatus').textContent = 'Complete ✓ (' + bvpResult.method + ', SNR ' + bvpResult.snr.toFixed(1) + ')';
     UI.showResults(result);
     UI.showFeatures(features, Predict.getImportance());
 
@@ -166,7 +185,7 @@
 
   function stopScan() {
     scanning = false;
-    Camera.stop();
+    Cam.stop();
     $('btnStart').disabled = false;
     $('btnStop').disabled = true;
     $('scanStatus').textContent = 'Stopped';
