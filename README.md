@@ -1,53 +1,44 @@
-# VitalScan — Camera-Based Blood Pressure Monitor
+# VitalScan v8 — Camera-Based BP Monitor
 
-Estimates heart rate and blood pressure from a 15-second facial video scan using remote photoplethysmography (rPPG). Runs entirely in the browser — no server required.
+Continuous heart rate and blood pressure estimation from facial video using remote photoplethysmography (rPPG).
 
-## Live Demo
-Deploy to GitHub Pages and open on your phone.
+## Deploy
 
-## Quick Deploy to GitHub Pages
+### Local (Chrome)
+Unzip → open `index.html` in Chrome. Done.
 
-1. Create a new repository on GitHub
-2. Upload **all files and folders** in this project (keep the folder structure)
-3. Go to **Settings → Pages → Source → main branch → / (root) → Save**
-4. Wait ~1 minute, then visit `https://YOUR-USERNAME.github.io/YOUR-REPO/`
+### GitHub Pages
+1. Create repo → upload all files (keep folder structure)
+2. Settings → Pages → main → root → Save
+3. Live at `https://USERNAME.github.io/REPO/`
 
 ## Project Structure
-
 ```
-├── index.html          # Main page
-├── css/
-│   └── style.css       # Styling
-├── js/
-│   ├── signal.js       # POS algorithm, Butterworth filter, FFT, feature extraction
-│   ├── predict.js      # GBR tree walker + Neural Network forward pass
-│   ├── camera.js       # MediaPipe FaceMesh + ROI extraction
-│   ├── ui.js           # Charts, toasts, history rendering
-│   └── app.js          # Main controller
+├── index.html              ← UI shell (3.6 KB)
+├── css/style.css            ← Styling (3 KB)
+├── js/app.js                ← Camera, signal processing, prediction (22 KB)
 ├── models/
-│   ├── gbr.json        # Gradient Boosting model (300+300 trees, 444 KB)
-│   └── nn.json         # Neural Network weights (28→64→32→16→2, 36 KB)
+│   ├── gbr.js               ← Gradient Boosting (300 trees) - script loader
+│   ├── gbr.json              ← Same model as fetch() fallback
+│   ├── nn.js                 ← Neural Network (28→256→128→64→32→2) - script loader
+│   └── nn.json               ← Same model as fetch() fallback
 └── README.md
 ```
 
 ## How It Works
+Camera 30fps → MediaPipe FaceMesh 468 landmarks → 30 landmark patches (skin-filtered) → POS algorithm → Butterworth bandpass → 28 features → GBR+NN ensemble → BP
 
-**Pipeline:** Camera (30fps) → MediaPipe FaceMesh (468 landmarks) → 3 ROIs (forehead + cheeks) → POS algorithm → Butterworth bandpass (0.7–4 Hz) → BVP waveform → 28 features → GBR + NN ensemble → BP prediction
+## ROI Method (Ontiveros & Elgendi, Nature 2024)
+- 30 specific landmark indices (10 forehead + 10 left cheek + 10 right cheek)
+- 24×24 pixel patch around each landmark
+- YCbCr skin color filter rejects non-skin pixels
+- Quality-weighted averaging across ROIs
 
-**Ensemble:** `final_BP = 0.7 × GBR + 0.3 × NN`
-
-**Training Data:** 1,638 samples from 275 real hospital patients (PPG-BP Figshare + PPG-based-BP-assessment datasets). SBP range 80–176, DBP range 48–109 mmHg.
-
-**Accuracy:** GBR 5-fold CV: SBP MAE 3.29 mmHg, DBP MAE 2.39 mmHg
-
-## Features
-
-- 28 morphological features extracted from BVP waveform
-- Gradient Boosting (300 trees, depth 5) + MLP Neural Network (4 layers)
-- Personal calibration with recency-weighted offset correction
-- Measurement history with trend charts
-- Real-time signal quality visualization
+## Models
+- **GBR**: 300+300 trees, depth 5, trained on 1,638 samples from 275 subjects
+- **NN**: 5-layer MLP (28→256→128→64→32→2), 47K parameters
+- **Ensemble**: 0.7×GBR + 0.3×NN
+- **Accuracy**: SBP MAE 3.29, DBP MAE 2.39 mmHg (5-fold CV)
 
 ## Disclaimer
-
-Research tool only. Not a medical device. Do not use for clinical decisions.
+Research tool only. Not a medical device.
