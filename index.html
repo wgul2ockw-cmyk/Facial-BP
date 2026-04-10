@@ -188,11 +188,11 @@ body{background:var(--bg);color:var(--t);font-family:var(--sans);min-height:100v
 <div class="prof-field"><label>Name</label><input id="profName" placeholder="Your name"></div>
 <div class="prof-field"><label>Age</label><input id="profAge" type="number" min="10" max="100" placeholder="e.g. 35"></div>
 <div class="prof-field"><label>Gender</label><select id="profGender"><option value="">Select</option><option value="0">Female</option><option value="1">Male</option></select></div>
-<div class="prof-field"><label>BMI</label><input id="profBMI" type="number" min="15" max="50" step="0.1" placeholder="e.g. 24.5"></div>
-<div class="prof-field"><label>Height (cm)</label><input id="profHeight" type="number" min="100" max="250" placeholder="170"></div>
-<div class="prof-field"><label>Weight (kg)</label><input id="profWeight" type="number" min="30" max="200" placeholder="70"></div>
-<button class="btn btn-a" id="btnSaveProf">Save profile</button>
-<button class="btn btn-danger" id="btnResetProf">Reset profile</button>
+<div class="prof-field"><label>BMI</label><input id="profBMI" type="text" readonly style="opacity:0.7;cursor:default" placeholder="auto"></div>
+<div class="prof-field"><label>Height (cm)</label><input id="profHeight" type="number" min="100" max="250" placeholder="170" oninput="window._calcBMI()"></div>
+<div class="prof-field"><label>Weight (kg)</label><input id="profWeight" type="number" min="30" max="200" placeholder="70" oninput="window._calcBMI()"></div>
+<button class="btn btn-a" id="btnSaveProf" onclick="window._saveProfile()">Save profile</button>
+<button class="btn btn-danger" id="btnResetProf" onclick="window._resetProfile()">Reset profile</button>
 </div>
 <div class="info-text" style="padding:0 14px 14px">
 Your age, gender, and BMI are used as model inputs — they directly improve BP prediction accuracy. The trained model learned that older age and higher BMI correlate with higher BP through arterial stiffness. Height is used for stiffness index calculation.
@@ -207,7 +207,7 @@ Your age, gender, and BMI are used as model inputs — they directly improve BP 
 <!-- HISTORY -->
 <main class="tab hidden" id="tab-history">
 <section class="panel">
-<div class="ph"><span class="pt">Measurement history</span><button class="btn btn-xs btn-danger" id="btnClearHist">Clear all</button></div>
+<div class="ph"><span class="pt">Measurement history</span><button class="btn btn-xs btn-danger" id="btnClearHist" onclick="window._clearHist()">Clear all</button></div>
 <div style="padding:14px" id="histList"><p class="empty">No measurements yet.</p></div>
 </section>
 <section class="panel">
@@ -225,8 +225,8 @@ Your age, gender, and BMI are used as model inputs — they directly improve BP 
 <div class="prof-form">
 <div class="prof-field"><label>Cuff systolic (mmHg)</label><input id="calSBP" type="number" min="70" max="220" placeholder="120"></div>
 <div class="prof-field"><label>Cuff diastolic (mmHg)</label><input id="calDBP" type="number" min="40" max="140" placeholder="80"></div>
-<button class="btn btn-a" id="btnSaveCal">Save calibration</button>
-<button class="btn btn-danger" id="btnClearCal">Reset calibration</button>
+<button class="btn btn-a" id="btnSaveCal" onclick="window._saveCal()">Save calibration</button>
+<button class="btn btn-danger" id="btnClearCal" onclick="window._clearCal()">Reset calibration</button>
 </div>
 <div class="cal-stats" id="calStats"></div>
 </div>
@@ -399,7 +399,7 @@ $('rPTT').textContent=r.ptt?r.ptt.toFixed(1):'--';
 if(r.ptt)log('PTT: '+r.ptt.toFixed(1)+' ms');log('Quality: '+sq.l+' (SNR '+Math.round(sq.s*100)+'%)');
 if(r.f._model)log('Model: '+r.f._model+(r.f._cal?' + calibrated ('+r.f._calPts+' pts)':''));
 showWaveExplainer(r.f);showFeatures(r.f);
-lastRes={hr:Math.round(hr),sbp:r.sbp,dbp:r.dbp,q:sq.l,ptt:r.ptt,f:r.f};saveHist(lastRes);drawSig();drawSpec();stopCam()}
+lastRes={hr:Math.round(hr),sbp:r.sbp,dbp:r.dbp,q:sq.l,ptt:r.ptt,f:r.f};window._lastRes=lastRes;saveHist(lastRes);drawSig();drawSpec();stopCam()}
 
 // ============ WAVE EXPLAINER ============
 function showWaveExplainer(f){
@@ -488,6 +488,93 @@ $('btnSaveCal').addEventListener('click',()=>{const cs=parseInt($('calSBP').valu
 $('btnClearCal').addEventListener('click',()=>{bp.clearCal();renderCal();log('Calibration reset')});
 
 log('VitalScan v2 initialized (model: '+window.__MW__.n+' samples, SBP MAE '+window.__MW__.sbp_mae+', DBP MAE '+window.__MW__.dbp_mae+')');}
+
+// Expose functions globally for onclick handlers
+window._calcBMI = function(){
+  var h = parseFloat(document.getElementById('profHeight').value);
+  var w = parseFloat(document.getElementById('profWeight').value);
+  if (h > 0 && w > 0) {
+    var bmi = (w / ((h/100) * (h/100))).toFixed(1);
+    document.getElementById('profBMI').value = bmi;
+  } else {
+    document.getElementById('profBMI').value = '';
+  }
+};
+
+window._saveProfile = function(){
+  var p = {
+    name: document.getElementById('profName').value,
+    age: parseInt(document.getElementById('profAge').value) || null,
+    gender: document.getElementById('profGender').value !== '' ? parseInt(document.getElementById('profGender').value) : null,
+    bmi: parseFloat(document.getElementById('profBMI').value) || null,
+    height: parseFloat(document.getElementById('profHeight').value) || null,
+    weight: parseFloat(document.getElementById('profWeight').value) || null
+  };
+  if (!p.bmi && p.height && p.weight) p.bmi = Math.round(p.weight / ((p.height/100)*(p.height/100)) * 10) / 10;
+  try {
+    localStorage.setItem('vs_profile', JSON.stringify(p));
+    document.getElementById('profBadge').textContent = p.name || 'Saved';
+    alert('Profile saved! Age: ' + (p.age||'?') + ', BMI: ' + (p.bmi||'?') + ', Gender: ' + (p.gender===1?'M':'F'));
+  } catch(e) {
+    alert('Error saving: ' + e.message);
+  }
+};
+
+window._resetProfile = function(){
+  try { localStorage.removeItem('vs_profile'); } catch(e){}
+  document.getElementById('profName').value = '';
+  document.getElementById('profAge').value = '';
+  document.getElementById('profGender').value = '';
+  document.getElementById('profBMI').value = '';
+  document.getElementById('profHeight').value = '';
+  document.getElementById('profWeight').value = '';
+  document.getElementById('profBadge').textContent = 'No profile';
+  alert('Profile reset');
+};
+
+window._saveCal = function(){
+  if (!window._lastRes || !window._lastRes.sbp) { alert('Complete a scan first.'); return; }
+  var cs = parseInt(document.getElementById('calSBP').value);
+  var cd = parseInt(document.getElementById('calDBP').value);
+  if (!cs || !cd || cs < 70 || cs > 220 || cd < 40 || cd > 140) { alert('Enter valid cuff BP values.'); return; }
+  try {
+    var data = JSON.parse(localStorage.getItem('vs_cal') || '[]');
+    data.push({d: new Date().toISOString(), p: {s: window._lastRes.sbp, d: window._lastRes.dbp}, c: {s: cs, d: cd}});
+    if (data.length > 20) data = data.slice(-20);
+    localStorage.setItem('vs_cal', JSON.stringify(data));
+    document.getElementById('calSBP').value = '';
+    document.getElementById('calDBP').value = '';
+    alert('Calibration saved: predicted ' + window._lastRes.sbp + '/' + window._lastRes.dbp + ' vs cuff ' + cs + '/' + cd);
+  } catch(e) { alert('Error: ' + e.message); }
+};
+
+window._clearCal = function(){
+  try { localStorage.removeItem('vs_cal'); } catch(e){}
+  document.getElementById('calList').innerHTML = '<p class="empty">No calibration data.</p>';
+  document.getElementById('calStats').innerHTML = '';
+  alert('Calibration cleared');
+};
+
+window._clearHist = function(){
+  try { localStorage.removeItem('vs_hist'); } catch(e){}
+  document.getElementById('histList').innerHTML = '<p class="empty">No measurements yet.</p>';
+  alert('History cleared');
+};
+
+// Load profile on startup
+try {
+  var sp = JSON.parse(localStorage.getItem('vs_profile') || '{}');
+  if (sp.name) document.getElementById('profName').value = sp.name;
+  if (sp.age) document.getElementById('profAge').value = sp.age;
+  if (sp.gender !== undefined && sp.gender !== null) document.getElementById('profGender').value = sp.gender;
+  if (sp.bmi) document.getElementById('profBMI').value = sp.bmi;
+  if (sp.height) document.getElementById('profHeight').value = sp.height;
+  if (sp.weight) document.getElementById('profWeight').value = sp.weight;
+  if (sp.name) document.getElementById('profBadge').textContent = sp.name;
+  if (sp.height && sp.weight) {
+    document.getElementById('profBMI').value = (sp.weight / ((sp.height/100)*(sp.height/100))).toFixed(1);
+  }
+} catch(e){}
 
 document.readyState==='loading'?document.addEventListener('DOMContentLoaded',init):init();
 })();
