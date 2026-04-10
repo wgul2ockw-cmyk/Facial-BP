@@ -484,7 +484,7 @@ loadProfile();
 // History
 $('btnClearHist').addEventListener('click',()=>{localStorage.removeItem('vs_hist');renderHist()});
 // Calibrate
-$('btnSaveCal').addEventListener('click',()=>{const cs=parseInt($('calSBP').value),cd=parseInt($('calDBP').value);if(!lastRes||!lastRes.sbp){alert('Complete a scan first.');return}if(!cs||!cd||cs<70||cs>220||cd<40||cd>140){alert('Enter valid cuff values.');return}bp.addCal(lastRes.sbp,lastRes.dbp,cs,cd);$('calSBP').value='';$('calDBP').value='';renderCal();log('Calibration saved: pred '+lastRes.sbp+'/'+lastRes.dbp+' → cuff '+cs+'/'+cd)});
+$('btnSaveCal').addEventListener('click',()=>{const cs=parseInt($('calSBP').value),cd=parseInt($('calDBP').value);if(!lastRes||!lastRes.sbp){alert('Done');return}if(!cs||!cd||cs<70||cs>220||cd<40||cd>140){alert('Enter valid cuff values.');return}bp.addCal(lastRes.sbp,lastRes.dbp,cs,cd);$('calSBP').value='';$('calDBP').value='';renderCal();log('Calibration saved: pred '+lastRes.sbp+'/'+lastRes.dbp+' → cuff '+cs+'/'+cd)});
 $('btnClearCal').addEventListener('click',()=>{bp.clearCal();renderCal();log('Calibration reset')});
 
 log('VitalScan v2 initialized (model: '+window.__MW__.n+' samples, SBP MAE '+window.__MW__.sbp_mae+', DBP MAE '+window.__MW__.dbp_mae+')');}
@@ -502,21 +502,30 @@ window._calcBMI = function(){
 };
 
 window._saveProfile = function(){
-  var p = {
-    name: document.getElementById('profName').value,
-    age: parseInt(document.getElementById('profAge').value) || null,
-    gender: document.getElementById('profGender').value !== '' ? parseInt(document.getElementById('profGender').value) : null,
-    bmi: parseFloat(document.getElementById('profBMI').value) || null,
-    height: parseFloat(document.getElementById('profHeight').value) || null,
-    weight: parseFloat(document.getElementById('profWeight').value) || null
-  };
-  if (!p.bmi && p.height && p.weight) p.bmi = Math.round(p.weight / ((p.height/100)*(p.height/100)) * 10) / 10;
   try {
+    var nm = document.getElementById('profName').value || '';
+    var ag = document.getElementById('profAge').value || '';
+    var gn = document.getElementById('profGender').value || '';
+    var ht = document.getElementById('profHeight').value || '';
+    var wt = document.getElementById('profWeight').value || '';
+    var bm = document.getElementById('profBMI').value || '';
+    var p = {name:nm, age:ag?parseInt(ag):null, gender:gn!==''?parseInt(gn):null, bmi:bm?parseFloat(bm):null, height:ht?parseFloat(ht):null, weight:wt?parseFloat(wt):null};
     localStorage.setItem('vs_profile', JSON.stringify(p));
-    document.getElementById('profBadge').textContent = p.name || 'Saved';
-    alert('Profile saved! Age: ' + (p.age||'?') + ', BMI: ' + (p.bmi||'?') + ', Gender: ' + (p.gender===1?'M':'F'));
+    document.getElementById('profBadge').textContent = nm || 'Saved';
+    var msg = document.createElement('div');
+    msg.style.cssText = 'padding:10px 14px;margin:10px 14px;background:rgba(62,230,138,0.15);border:1px solid rgba(62,230,138,0.3);border-radius:8px;color:#3ee68a;font-family:var(--mono);font-size:12px';
+    msg.textContent = 'Profile saved! Age: ' + (p.age||'-') + ', BMI: ' + (p.bmi||'-') + ', Gender: ' + (p.gender===1?'Male':'Female');
+    var form = document.getElementById('profForm');
+    var existing = document.getElementById('profMsg');
+    if (existing) existing.remove();
+    msg.id = 'profMsg';
+    form.parentNode.insertBefore(msg, form.nextSibling);
+    setTimeout(function(){ var el = document.getElementById('profMsg'); if(el) el.remove(); }, 4000);
   } catch(e) {
-    alert('Error saving: ' + e.message);
+    var msg2 = document.createElement('div');
+    msg2.style.cssText = 'padding:10px 14px;margin:10px 14px;background:rgba(230,74,74,0.15);border:1px solid rgba(230,74,74,0.3);border-radius:8px;color:#e66;font-family:var(--mono);font-size:12px';
+    msg2.textContent = 'Error: ' + e.message;
+    document.getElementById('profForm').parentNode.appendChild(msg2);
   }
 };
 
@@ -529,14 +538,21 @@ window._resetProfile = function(){
   document.getElementById('profHeight').value = '';
   document.getElementById('profWeight').value = '';
   document.getElementById('profBadge').textContent = 'No profile';
-  alert('Profile reset');
+  var existing = document.getElementById('profMsg');
+  if (existing) existing.remove();
+  var msg = document.createElement('div');
+  msg.id = 'profMsg';
+  msg.style.cssText = 'padding:10px 14px;margin:10px 14px;background:rgba(230,166,62,0.15);border:1px solid rgba(230,166,62,0.3);border-radius:8px;color:#e6a63e;font-family:var(--mono);font-size:12px';
+  msg.textContent = 'Profile reset';
+  document.getElementById('profForm').parentNode.insertBefore(msg, document.getElementById('profForm').nextSibling);
+  setTimeout(function(){ var el = document.getElementById('profMsg'); if(el) el.remove(); }, 3000);
 };
 
 window._saveCal = function(){
-  if (!window._lastRes || !window._lastRes.sbp) { alert('Complete a scan first.'); return; }
+  if (!window._lastRes || !window._lastRes.sbp) { void 0; return; }
   var cs = parseInt(document.getElementById('calSBP').value);
   var cd = parseInt(document.getElementById('calDBP').value);
-  if (!cs || !cd || cs < 70 || cs > 220 || cd < 40 || cd > 140) { alert('Enter valid cuff BP values.'); return; }
+  if (!cs || !cd || cs < 70 || cs > 220 || cd < 40 || cd > 140) { void 0; return; }
   try {
     var data = JSON.parse(localStorage.getItem('vs_cal') || '[]');
     data.push({d: new Date().toISOString(), p: {s: window._lastRes.sbp, d: window._lastRes.dbp}, c: {s: cs, d: cd}});
@@ -552,13 +568,13 @@ window._clearCal = function(){
   try { localStorage.removeItem('vs_cal'); } catch(e){}
   document.getElementById('calList').innerHTML = '<p class="empty">No calibration data.</p>';
   document.getElementById('calStats').innerHTML = '';
-  alert('Calibration cleared');
+  void 0;
 };
 
 window._clearHist = function(){
   try { localStorage.removeItem('vs_hist'); } catch(e){}
   document.getElementById('histList').innerHTML = '<p class="empty">No measurements yet.</p>';
-  alert('History cleared');
+  void 0;
 };
 
 // Load profile on startup
