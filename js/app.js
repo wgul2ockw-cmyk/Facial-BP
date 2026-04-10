@@ -25,9 +25,10 @@ var ALL_LM = LM_FH.concat(LM_LC).concat(LM_RC); // 43 total
 var vid, ov, ovCtx, fm = null, mpc = null;
 var on = false, fc = 0, ready = false;
 var rgbBuf = []; // [{r,g,b}] per frame, averaged across all patches
-var bestReport = null; // best-SNR report
-var snrHistory = []; // track SNR over time
-var reportSent = false;
+var predictions = []; // collect {snr, hr, sbp, dbp, rawSbp, rawDbp, calApplied, calPoints, ibibVar, numBeats, feats}
+var foundBest = false;
+var MIN_SCAN = 15; // minimum seconds before accepting
+var MAX_SCAN = 30; // auto-pick best after this
 var patchBuf = []; // per-patch RGB for quality weighting
 var readyFrames = 0;
 
@@ -459,7 +460,7 @@ function $(id){return document.getElementById(id);}
 // ===== CAMERA + MAIN LOOP =====
 function toggle() {
   if (on) { on=false; if(mpc)try{mpc.stop();}catch(e){} mpc=null; $('btnGo').textContent='▶ Start'; $('st').textContent='Stopped'; return; }
-  on=true; fc=0; rgbBuf=[]; readyFrames=0; ready=false; bestReport=null; snrHistory=[]; reportSent=false;
+  on=true; fc=0; rgbBuf=[]; readyFrames=0; ready=false; predictions=[]; foundBest=false;
   $('btnGo').textContent='⬛ Stop'; $('st').textContent='Starting…';
   ['c1','c2','c3','c4','c5','resBar','ibar','roiBar'].forEach(function(id){$(id).style.display='none';});
 
@@ -511,7 +512,9 @@ function onFace(res) {
   rgbBuf.push(result.mean);
   if (rgbBuf.length > FPS * BUF_SEC) rgbBuf = rgbBuf.slice(-FPS * BUF_SEC);
 
-  $('st').textContent = 'Scanning · ' + rgbBuf.length + ' frames · ' + result.patches.length + ' patches · ' + result.totalPixels + ' skin px';
+  var elapsed = (rgbBuf.length / FPS);
+  var progress = Math.min(100, elapsed / MIN_SCAN * 100).toFixed(0);
+  $('st').textContent = 'Scanning · ' + elapsed.toFixed(0) + 's · ' + result.patches.length + ' patches · ' + (elapsed < MIN_SCAN ? progress + '% to first reading' : predictions.length + ' readings');
   $('fCount').textContent = 'F' + fc;
 
   // Draw patches on overlay
@@ -616,8 +619,27 @@ function onFace(res) {
         var finalSbp=res.sbp,finalDbp=res.dbp;
         var cat=finalSbp<120&&finalDbp<80?{l:'Normal',c:'#3ee68a'}:finalSbp<140?{l:'Elevated',c:'#e6a63e'}:{l:'Hypertension',c:'#e66a6a'};
         var ce=$('bpC');ce.textContent=cat.l;ce.style.color=cat.c;ce.style.background=cat.c+'1a';
-        saveHist(res.sbp,res.dbp,feats.hr);
-        checkBestReport(snr, feats, res, bS);
+        // Collect prediction with quality score
+        var ibiVar = feats.sdnn / feats.meanIBI; // coefficient of variation — lower = more regular
+        predictions.push({
+          snr: snr, hr: feats.hr, sbp: res.sbp, dbp: res.dbp,
+          rawSbp: res.rawSbp, rawDbp: res.rawDbp,
+          calApplied: res.calApplied, calPoints: res.calPoints,
+          ibiVar: ibiVar, numBeats: feats.numBeats,
+          sdnn: feats.sdnn, rmssd: feats.rmssd,
+          time: new Date().toLocaleTimeString()
+        });
+
+        // Check if we have a confident reading
+        var elapsed = rgbBuf.length / FPS;
+        if (!foundBest && elapsed >= MIN_SCAN) {
+          var best = pickBest();
+          if (best || elapsed >= MAX_SCAN) {
+            foundBest = true;
+            var final = best || predictions[predictions.length - 1];
+            lockResult(final);
+          }
+        }
       }
     }
   }
@@ -625,70 +647,93 @@ function onFace(res) {
 
 
 
-// ===== AUTO-REPORT (peak reliability) =====
-function checkBestReport(snr, feats, res, bvpData) {
-  snrHistory.push(snr);
-  if (snrHistory.length < 3) return;
+// ===== BEST PREDICTION PICKER =====
+function pickBest() {
+  if (predictions.length < 3) return null;
 
-  // Update best if this is the highest SNR so far
-  if (!bestReport || snr > bestReport.snr) {
-    bestReport = {
-      snr: snr,
-      hr: feats.hr,
-      rawSbp: res.rawSbp, rawDbp: res.rawDbp,
-      sbp: res.sbp, dbp: res.dbp,
-      calApplied: res.calApplied, calPoints: res.calPoints,
-      numBeats: feats.numBeats,
-      sdnn: feats.sdnn, rmssd: feats.rmssd,
-      time: new Date().toLocaleTimeString(),
-      timestamp: Date.now()
-    };
-  }
-
-  // Detect peak: if SNR has been declining for 3+ readings after a peak, lock in report
-  if (snrHistory.length >= 6 && !reportSent) {
-    var recent = snrHistory.slice(-4);
-    var peak = bestReport.snr;
-    // Check if all recent readings are below 80% of peak AND peak was good (>2dB)
-    var allBelow = true;
-    for (var i = 0; i < recent.length; i++) { if (recent[i] >= peak * 0.85) allBelow = false; }
-    if (peak > 2 && allBelow) {
-      reportSent = true;
-      showReport(bestReport);
+  // Need at least 2 predictions that agree (SBP within ±5)
+  for (var i = predictions.length - 1; i >= 1; i--) {
+    var a = predictions[i];
+    if (a.snr < 2) continue; // skip low quality
+    var agrees = 0;
+    for (var j = 0; j < predictions.length; j++) {
+      if (j === i) continue;
+      if (Math.abs(predictions[j].sbp - a.sbp) <= 5 && Math.abs(predictions[j].dbp - a.dbp) <= 5) agrees++;
     }
+    // If 2+ other predictions agree AND SNR is decent → confident
+    if (agrees >= 2 && a.snr >= 2) return a;
+  }
+  return null; // no consensus yet
+}
+
+function playBeep() {
+  try {
+    var ac = new (window.AudioContext || window.webkitAudioContext)();
+    // Two-tone beep like a BP monitor
+    function tone(freq, start, dur) {
+      var o = ac.createOscillator(), g = ac.createGain();
+      o.type = 'sine'; o.frequency.value = freq;
+      g.gain.setValueAtTime(0.3, ac.currentTime + start);
+      g.gain.exponentialRampToValueAtTime(0.01, ac.currentTime + start + dur);
+      o.connect(g); g.connect(ac.destination);
+      o.start(ac.currentTime + start); o.stop(ac.currentTime + start + dur);
+    }
+    tone(880, 0, 0.15);
+    tone(880, 0.2, 0.15);
+    tone(1100, 0.45, 0.25);
+  } catch(e) {}
+}
+
+function lockResult(rpt) {
+  // Stop scanning
+  on = false; if (mpc) try { mpc.stop(); } catch(e) {} mpc = null;
+  $('btnGo').textContent = '▶ Start';
+
+  // Play notification sound
+  playBeep();
+
+  // Save to history
+  saveHist(rpt.sbp, rpt.dbp, rpt.hr);
+
+  // Show status
+  $('st').textContent = '✓ Reading complete · SNR ' + rpt.snr.toFixed(1) + ' dB';
+
+  // Show final result in the result bar
+  $('resBar').style.display = '';
+  $('rawHR').textContent = rpt.hr;
+  $('rawSBP').textContent = rpt.rawSbp;
+  $('rawDBP').textContent = rpt.rawDbp;
+  if (rpt.calApplied) {
+    $('calRow').style.display = '';
+    $('calHR').textContent = rpt.hr;
+    $('calSBP').textContent = rpt.sbp;
+    $('calDBP').textContent = rpt.dbp;
+    $('calInfo').textContent = rpt.calPoints + ' calibration points · SNR ' + rpt.snr.toFixed(1) + ' dB · ' + rpt.numBeats + ' beats';
+  } else {
+    $('calRow').style.display = 'none';
+    $('calInfo').textContent = 'SNR ' + rpt.snr.toFixed(1) + ' dB · ' + rpt.numBeats + ' beats · IBI regularity ' + ((1 - rpt.ibiVar) * 100).toFixed(0) + '%';
+  }
+  var cat = rpt.sbp<120&&rpt.dbp<80?{l:'Normal',c:'#3ee68a'}:rpt.sbp<140?{l:'Elevated',c:'#e6a63e'}:{l:'Hypertension',c:'#e66a6a'};
+  var ce = $('bpC'); ce.textContent = cat.l; ce.style.color = cat.c; ce.style.background = cat.c + '1a';
+
+  // Show report card
+  var el = $('reportCard');
+  if (el) {
+    el.style.display = '';
+    el.innerHTML = '<div class="card-h"><span>✓ MEASUREMENT COMPLETE</span><span class="dim">' + rpt.time + '</span></div>' +
+      '<div style="font:10px monospace;color:var(--dim);padding:4px 0">' +
+        predictions.length + ' predictions analyzed · best consensus at SNR ' + rpt.snr.toFixed(1) + ' dB' +
+      '</div>' +
+      '<div style="text-align:center;padding:8px 0">' +
+        '<button class="btn btn-g" onclick="resetAndStart()" style="padding:8px 20px">Measure again</button>' +
+      '</div>';
   }
 }
 
-function showReport(rpt) {
-  var el = $('reportCard');
-  if (!el) return;
-  el.style.display = '';
-  var cat = rpt.sbp<120&&rpt.dbp<80?{l:'Normal',c:'#3ee68a'}:rpt.sbp<140?{l:'Elevated',c:'#e6a63e'}:{l:'Hypertension',c:'#e66a6a'};
-  el.innerHTML = '<div class="card-h"><span>📋 BEST READING (peak SNR '+rpt.snr.toFixed(1)+' dB)</span><span class="dim">'+rpt.time+'</span></div>' +
-    '<div class="res-table">' +
-      '<div class="res-header"><div class="res-lbl"></div><div class="res-col">HR</div><div class="res-col">SBP</div><div class="res-col">DBP</div></div>' +
-      '<div class="res-row"><div class="res-lbl">Raw</div>' +
-        '<div class="res-col"><span class="rv-sm">'+rpt.hr+'</span></div>' +
-        '<div class="res-col"><span class="rv-sm raw-sbp">'+rpt.rawSbp+'</span></div>' +
-        '<div class="res-col"><span class="rv-sm raw-dbp">'+rpt.rawDbp+'</span></div></div>' +
-      (rpt.calApplied ? '<div class="res-row cal-row"><div class="res-lbl cal-lbl">Calibrated</div>' +
-        '<div class="res-col"><span class="rv-lg">'+rpt.hr+'</span></div>' +
-        '<div class="res-col"><span class="rv-lg cal-sbp">'+rpt.sbp+'</span></div>' +
-        '<div class="res-col"><span class="rv-lg cal-dbp">'+rpt.dbp+'</span></div></div>' : '') +
-    '</div>' +
-    '<div class="bp-cat" style="color:'+cat.c+';background:'+cat.c+'1a">'+cat.l+'</div>' +
-    '<div style="font:10px monospace;color:var(--dim);padding:6px 0;display:grid;grid-template-columns:1fr 1fr;gap:4px">' +
-      '<span>Beats: '+rpt.numBeats+'</span>' +
-      '<span>SDNN: '+rpt.sdnn.toFixed(3)+'s</span>' +
-      '<span>RMSSD: '+rpt.rmssd.toFixed(3)+'s</span>' +
-      (rpt.calApplied ? '<span>Cal points: '+rpt.calPoints+'</span>' : '<span>No calibration</span>') +
-    '</div>' +
-    '<div style="text-align:center;padding:6px 0"><button class="btn btn-g" onclick="resetReport()" style="font-size:10px;padding:5px 12px">New measurement</button></div>';
-}
-
-function resetReport() {
-  bestReport = null; snrHistory = []; reportSent = false;
+function resetAndStart() {
   var el = $('reportCard'); if (el) el.style.display = 'none';
+  $('resBar').style.display = 'none';
+  toggle(); // restart scan
 }
 
 // ===== CALIBRATION =====
@@ -755,7 +800,7 @@ window.toggle = toggle;
 window.saveCal = saveCal;
 window.clearCal = clearCal;
 window.clearHist = clearHist;
-window.resetReport = resetReport;
+window.resetAndStart = resetAndStart;
 window.showTab = showTab;
 window.saveProf = saveProf;
 window.calcBMI = calcBMI;
