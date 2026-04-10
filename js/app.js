@@ -25,6 +25,9 @@ var ALL_LM = LM_FH.concat(LM_LC).concat(LM_RC); // 43 total
 var vid, ov, ovCtx, fm = null, mpc = null;
 var on = false, fc = 0, ready = false;
 var rgbBuf = []; // [{r,g,b}] per frame, averaged across all patches
+var bestReport = null; // best-SNR report
+var snrHistory = []; // track SNR over time
+var reportSent = false;
 var patchBuf = []; // per-patch RGB for quality weighting
 var readyFrames = 0;
 
@@ -456,7 +459,7 @@ function $(id){return document.getElementById(id);}
 // ===== CAMERA + MAIN LOOP =====
 function toggle() {
   if (on) { on=false; if(mpc)try{mpc.stop();}catch(e){} mpc=null; $('btnGo').textContent='▶ Start'; $('st').textContent='Stopped'; return; }
-  on=true; fc=0; rgbBuf=[]; readyFrames=0; ready=false;
+  on=true; fc=0; rgbBuf=[]; readyFrames=0; ready=false; bestReport=null; snrHistory=[]; reportSent=false;
   $('btnGo').textContent='⬛ Stop'; $('st').textContent='Starting…';
   ['c1','c2','c3','c4','c5','resBar','ibar','roiBar'].forEach(function(id){$(id).style.display='none';});
 
@@ -614,11 +617,79 @@ function onFace(res) {
         var cat=finalSbp<120&&finalDbp<80?{l:'Normal',c:'#3ee68a'}:finalSbp<140?{l:'Elevated',c:'#e6a63e'}:{l:'Hypertension',c:'#e66a6a'};
         var ce=$('bpC');ce.textContent=cat.l;ce.style.color=cat.c;ce.style.background=cat.c+'1a';
         saveHist(res.sbp,res.dbp,feats.hr);
+        checkBestReport(snr, feats, res, bS);
       }
     }
   }
 }
 
+
+
+// ===== AUTO-REPORT (peak reliability) =====
+function checkBestReport(snr, feats, res, bvpData) {
+  snrHistory.push(snr);
+  if (snrHistory.length < 3) return;
+
+  // Update best if this is the highest SNR so far
+  if (!bestReport || snr > bestReport.snr) {
+    bestReport = {
+      snr: snr,
+      hr: feats.hr,
+      rawSbp: res.rawSbp, rawDbp: res.rawDbp,
+      sbp: res.sbp, dbp: res.dbp,
+      calApplied: res.calApplied, calPoints: res.calPoints,
+      numBeats: feats.numBeats,
+      sdnn: feats.sdnn, rmssd: feats.rmssd,
+      time: new Date().toLocaleTimeString(),
+      timestamp: Date.now()
+    };
+  }
+
+  // Detect peak: if SNR has been declining for 3+ readings after a peak, lock in report
+  if (snrHistory.length >= 6 && !reportSent) {
+    var recent = snrHistory.slice(-4);
+    var peak = bestReport.snr;
+    // Check if all recent readings are below 80% of peak AND peak was good (>2dB)
+    var allBelow = true;
+    for (var i = 0; i < recent.length; i++) { if (recent[i] >= peak * 0.85) allBelow = false; }
+    if (peak > 2 && allBelow) {
+      reportSent = true;
+      showReport(bestReport);
+    }
+  }
+}
+
+function showReport(rpt) {
+  var el = $('reportCard');
+  if (!el) return;
+  el.style.display = '';
+  var cat = rpt.sbp<120&&rpt.dbp<80?{l:'Normal',c:'#3ee68a'}:rpt.sbp<140?{l:'Elevated',c:'#e6a63e'}:{l:'Hypertension',c:'#e66a6a'};
+  el.innerHTML = '<div class="card-h"><span>📋 BEST READING (peak SNR '+rpt.snr.toFixed(1)+' dB)</span><span class="dim">'+rpt.time+'</span></div>' +
+    '<div class="res-table">' +
+      '<div class="res-header"><div class="res-lbl"></div><div class="res-col">HR</div><div class="res-col">SBP</div><div class="res-col">DBP</div></div>' +
+      '<div class="res-row"><div class="res-lbl">Raw</div>' +
+        '<div class="res-col"><span class="rv-sm">'+rpt.hr+'</span></div>' +
+        '<div class="res-col"><span class="rv-sm raw-sbp">'+rpt.rawSbp+'</span></div>' +
+        '<div class="res-col"><span class="rv-sm raw-dbp">'+rpt.rawDbp+'</span></div></div>' +
+      (rpt.calApplied ? '<div class="res-row cal-row"><div class="res-lbl cal-lbl">Calibrated</div>' +
+        '<div class="res-col"><span class="rv-lg">'+rpt.hr+'</span></div>' +
+        '<div class="res-col"><span class="rv-lg cal-sbp">'+rpt.sbp+'</span></div>' +
+        '<div class="res-col"><span class="rv-lg cal-dbp">'+rpt.dbp+'</span></div></div>' : '') +
+    '</div>' +
+    '<div class="bp-cat" style="color:'+cat.c+';background:'+cat.c+'1a">'+cat.l+'</div>' +
+    '<div style="font:10px monospace;color:var(--dim);padding:6px 0;display:grid;grid-template-columns:1fr 1fr;gap:4px">' +
+      '<span>Beats: '+rpt.numBeats+'</span>' +
+      '<span>SDNN: '+rpt.sdnn.toFixed(3)+'s</span>' +
+      '<span>RMSSD: '+rpt.rmssd.toFixed(3)+'s</span>' +
+      (rpt.calApplied ? '<span>Cal points: '+rpt.calPoints+'</span>' : '<span>No calibration</span>') +
+    '</div>' +
+    '<div style="text-align:center;padding:6px 0"><button class="btn btn-g" onclick="resetReport()" style="font-size:10px;padding:5px 12px">New measurement</button></div>';
+}
+
+function resetReport() {
+  bestReport = null; snrHistory = []; reportSent = false;
+  var el = $('reportCard'); if (el) el.style.display = 'none';
+}
 
 // ===== CALIBRATION =====
 function saveCal(){
@@ -684,6 +755,7 @@ window.toggle = toggle;
 window.saveCal = saveCal;
 window.clearCal = clearCal;
 window.clearHist = clearHist;
+window.resetReport = resetReport;
 window.showTab = showTab;
 window.saveProf = saveProf;
 window.calcBMI = calcBMI;

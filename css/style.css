@@ -67,3 +67,5 @@ canvas.ch{width:100%;display:block;border-radius:4px}
 .cal-dbp{color:var(--grn)}
 .cal-row{border-top:1px solid var(--bdr);background:rgba(167,139,250,.04);border-radius:6px;margin-top:2px}
 .cal-lbl{color:var(--acc)!important}
+
+.report-card{border:1px solid var(--grn);background:rgba(62,230,138,.03)}
